@@ -39,10 +39,10 @@ export type InfoRequestParams = {
   wormholeRelayerAddresses?: Map<ChainName, string>;
 };
 
-
 export type GetPriceOptParams = {
   environment?: Network;
   receiverValue?: ethers.BigNumberish;
+  wormholeRelayerAddress?: string;
   deliveryProviderAddress?: string;
   sourceChainProvider?: ethers.providers.Provider;
 };
@@ -61,10 +61,9 @@ export async function getPriceAndRefundInfo(
     throw Error(
       "No default RPC for this chain; pass in your own provider (as sourceChainProvider)"
     );
-  const wormholeRelayerAddress = getWormholeRelayerAddress(
-    sourceChain,
-    environment
-  );
+  const wormholeRelayerAddress =
+    optionalParams?.wormholeRelayerAddress ||
+    getWormholeRelayerAddress(sourceChain, environment);
   const sourceWormholeRelayer =
     ethers_contracts.IWormholeRelayer__factory.connect(
       wormholeRelayerAddress,
@@ -190,7 +189,15 @@ export function stringifyWormholeRelayerInfo(info: DeliveryInfo): string {
     info.deliveryInstruction.targetAddress.toString("hex") !==
       "0000000000000000000000000000000000000000000000000000000000000000"
   ) {
-    stringifiedInfo += `Found delivery request in transaction ${info.sourceTransactionHash} on ${info.sourceChain}\n`;
+    stringifiedInfo += `Found delivery request in transaction ${
+      info.sourceTransactionHash
+    } on ${
+      info.sourceChain
+    }\nfrom sender ${info.deliveryInstruction.senderAddress.toString(
+      "hex"
+    )} from ${info.sourceChain} with delivery sequence number ${
+      info.sourceDeliverySequenceNumber
+    }\n`;
     const numMsgs = info.deliveryInstruction.vaaKeys.length;
 
     const payload = info.deliveryInstruction.payload.toString("hex");
@@ -235,9 +242,15 @@ export function stringifyWormholeRelayerInfo(info: DeliveryInfo): string {
       instruction.extraReceiverValue
     );
     stringifiedInfo += totalReceiverValue.gt(0)
-      ? `Amount to pass into target address: ${totalReceiverValue} wei of ${targetChainName} currency ${
+      ? `Amount to pass into target address: ${ethers.utils.formatEther(
+          totalReceiverValue
+        )} of ${targetChainName} currency ${
           instruction.extraReceiverValue.gt(0)
-            ? `${instruction.requestedReceiverValue} requested, ${instruction.extraReceiverValue} additionally paid for`
+            ? `\n${ethers.utils.formatEther(
+                instruction.requestedReceiverValue
+              )} requested, ${ethers.utils.formatEther(
+                instruction.extraReceiverValue
+              )} additionally paid for`
             : ""
         }\n`
       : ``;
@@ -245,8 +258,19 @@ export function stringifyWormholeRelayerInfo(info: DeliveryInfo): string {
       instruction.encodedExecutionInfo,
       0
     );
-    stringifiedInfo += `Gas limit: ${executionInfo.gasLimit} ${targetChainName} gas\n\n`;
-    stringifiedInfo += `Refund rate: ${executionInfo.targetChainRefundPerGasUnused} of ${targetChainName} wei per unit of gas unused\n\n`;
+    stringifiedInfo += `Gas limit: ${executionInfo.gasLimit} ${targetChainName} gas\n`;
+
+    const refundAddressChosen =
+      instruction.refundAddress !== instruction.refundDeliveryProvider;
+    if (refundAddressChosen) {
+      stringifiedInfo += `Refund rate: ${ethers.utils.formatEther(
+        executionInfo.targetChainRefundPerGasUnused
+      )} of ${targetChainName} currency per unit of gas unused\n`;
+      stringifiedInfo += `Refund address: ${instruction.refundAddress.toString(
+        "hex"
+      )}\n`;
+    }
+    stringifiedInfo += `\n`;
     stringifiedInfo += info.targetChainStatus.events
 
       .map(
@@ -263,9 +287,19 @@ export function stringifyWormholeRelayerInfo(info: DeliveryInfo): string {
                     : e.revertString
                 }\n`
               : ""
-          }Gas used: ${e.gasUsed.toString()}\nTransaction fee used: ${executionInfo.targetChainRefundPerGasUnused
-            .mul(e.gasUsed)
-            .toString()} wei of ${targetChainName} currency\n}`
+          }Gas used: ${e.gasUsed.toString()}\nTransaction fee used: ${ethers.utils.formatEther(
+            executionInfo.targetChainRefundPerGasUnused.mul(e.gasUsed)
+          )} of ${targetChainName} currency\n${
+            !refundAddressChosen || e.status === "Forward Request Success"
+              ? ""
+              : `Refund amount: ${ethers.utils.formatEther(
+                  executionInfo.targetChainRefundPerGasUnused.mul(
+                    executionInfo.gasLimit.sub(e.gasUsed)
+                  )
+                )} of ${targetChainName} currency \nRefund status: ${
+                  e.refundStatus
+                }\n`
+          }`
       )
       .join("\n");
   } else if (
@@ -279,11 +313,11 @@ export function stringifyWormholeRelayerInfo(info: DeliveryInfo): string {
     const targetChainName =
       CHAIN_ID_TO_NAME[instruction.targetChainId as ChainId];
 
-    stringifiedInfo += `\nA refund of ${
+    stringifiedInfo += `\nA refund of ${ethers.utils.formatEther(
       instruction.extraReceiverValue
-    } ${targetChainName} wei was requested to be sent to ${targetChainName}, address 0x${info.deliveryInstruction.refundAddress.toString(
+    )} ${targetChainName} currency was requested to be sent to ${targetChainName}, address 0x${info.deliveryInstruction.refundAddress.toString(
       "hex"
-    )}`;
+    )}\n\n`;
 
     stringifiedInfo += info.targetChainStatus.events
 

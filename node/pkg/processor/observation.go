@@ -195,7 +195,7 @@ func (p *Processor) handleObservation(ctx context.Context, m *gossipv1.SignedObs
 		// 2/3+ majority required for VAA to be valid - wait until we have quorum to submit VAA.
 		quorum := vaa.CalculateQuorum(len(gs.Keys))
 
-		p.logger.Info("aggregation state for observation",
+		p.logger.Debug("aggregation state for observation", // 1.3M out of 3M info messages / hour / guardian
 			zap.String("digest", hash),
 			zap.Any("set", gs.KeysAsHexStrings()),
 			zap.Uint32("index", gs.Index),
@@ -208,11 +208,11 @@ func (p *Processor) handleObservation(ctx context.Context, m *gossipv1.SignedObs
 		if len(sigs) >= quorum && !p.state.signatures[hash].submitted {
 			p.state.signatures[hash].ourObservation.HandleQuorum(sigs, hash, p)
 		} else {
-			p.logger.Info("quorum not met or already submitted, doing nothing",
+			p.logger.Debug("quorum not met or already submitted, doing nothing", // 1.2M out of 3M info messages / hour / guardian
 				zap.String("digest", hash))
 		}
 	} else {
-		p.logger.Info("we have not yet seen this observation - temporarily storing signature",
+		p.logger.Debug("we have not yet seen this observation - temporarily storing signature", // 175K out of 3M info messages / hour / guardian
 			zap.String("digest", hash),
 			zap.Bools("aggregation", agg))
 
@@ -224,6 +224,21 @@ func (p *Processor) handleInboundSignedVAAWithQuorum(ctx context.Context, m *gos
 	if err != nil {
 		p.logger.Warn("received invalid VAA in SignedVAAWithQuorum message",
 			zap.Error(err), zap.Any("message", m))
+		return
+	}
+
+	// Check if we already store this VAA
+	_, err = p.getSignedVAA(*db.VaaIDFromVAA(v))
+	if err == nil {
+		p.logger.Debug("ignored SignedVAAWithQuorum message for VAA we already stored",
+			zap.String("vaaID", string(db.VaaIDFromVAA(v).Bytes())),
+		)
+		return
+	} else if err != db.ErrVAANotFound {
+		p.logger.Error("failed to look up VAA in database",
+			zap.String("vaaID", string(db.VaaIDFromVAA(v).Bytes())),
+			zap.Error(err),
+		)
 		return
 	}
 
@@ -258,23 +273,8 @@ func (p *Processor) handleInboundSignedVAAWithQuorum(ctx context.Context, m *gos
 	//  - the signature's addresses match the node's current guardian set
 	//  - enough signatures are present for the VAA to reach quorum
 
-	// Check if we already store this VAA
-	_, err = p.getSignedVAA(*db.VaaIDFromVAA(v))
-	if err == nil {
-		p.logger.Debug("ignored SignedVAAWithQuorum message for VAA we already store",
-			zap.String("digest", hash),
-		)
-		return
-	} else if err != db.ErrVAANotFound {
-		p.logger.Error("failed to look up VAA in database",
-			zap.String("digest", hash),
-			zap.Error(err),
-		)
-		return
-	}
-
 	// Store signed VAA in database.
-	p.logger.Info("storing inbound signed VAA with quorum",
+	p.logger.Debug("storing inbound signed VAA with quorum",
 		zap.String("digest", hash),
 		zap.Any("vaa", v),
 		zap.String("bytes", hex.EncodeToString(m.Vaa)),

@@ -55,8 +55,6 @@ type (
 		settled bool
 		// Human-readable description of the VAA's source, used for metrics.
 		source string
-		// Number of times the cleanup service has attempted to retransmit this VAA.
-		retryCount uint
 		// Copy of the bytes we submitted (ourObservation, but signed and serialized). Used for retransmissions.
 		ourMsg []byte
 		// The hash of the transaction in which the observation was made.  Used for re-observation requests.
@@ -265,6 +263,7 @@ func (p *Processor) storeSignedVAA(v *vaa.VAA) error {
 }
 
 func (p *Processor) getSignedVAA(id db.VAAID) (*vaa.VAA, error) {
+
 	if id.EmitterChain == vaa.ChainIDPythNet {
 		key := fmt.Sprintf("%v/%v", id.EmitterAddress, id.Sequence)
 		ret, exists := p.pythnetVaas[key]
@@ -272,6 +271,10 @@ func (p *Processor) getSignedVAA(id db.VAAID) (*vaa.VAA, error) {
 			return ret.v, nil
 		}
 
+		return nil, db.ErrVAANotFound
+	}
+
+	if p.db == nil {
 		return nil, db.ErrVAANotFound
 	}
 

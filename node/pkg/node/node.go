@@ -85,11 +85,21 @@ func GuardianOptionP2P(p2pKey libp2p_crypto.PrivKey, networkId string, bootstrap
 		}}
 }
 
-// GuardianOptionAccountant configures the Accountant module.
-// Requires: wormchainConn
-func GuardianOptionAccountant(contract string, websocket string, enforcing bool) *GuardianOption {
+func GuardianOptionNoAccountant() *GuardianOption {
 	return &GuardianOption{
 		name: "accountant",
+		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
+			logger.Info("acct: accountant is disabled", zap.String("component", "gacct"))
+			return nil
+		}}
+}
+
+// GuardianOptionAccountant configures the Accountant module.
+// Requires: wormchainConn
+func GuardianOptionAccountant(contract string, websocket string, enforcing bool, wormchainConn *wormconn.ClientConn) *GuardianOption {
+	return &GuardianOption{
+		name:         "accountant",
+		dependencies: []string{"db"},
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			// Set up the accountant. If the accountant smart contract is configured, we will instantiate the accountant and VAAs
 			// will be passed to it for processing. It will forward all token bridge transfers to the accountant contract.
@@ -103,7 +113,7 @@ func GuardianOptionAccountant(contract string, websocket string, enforcing bool)
 			if websocket == "" {
 				return errors.New("acct: if accountantContract is specified, accountantWS is required")
 			}
-			if g.wormchainConn == nil {
+			if wormchainConn == nil {
 				return errors.New("acct: if accountantContract is specified, the wormchain sending connection must be enabled before.")
 			}
 			if enforcing {
@@ -119,7 +129,7 @@ func GuardianOptionAccountant(contract string, websocket string, enforcing bool)
 				g.obsvReqC.writeC,
 				contract,
 				websocket,
-				g.wormchainConn,
+				wormchainConn,
 				enforcing,
 				g.gk,
 				g.gst,
@@ -133,7 +143,8 @@ func GuardianOptionAccountant(contract string, websocket string, enforcing bool)
 
 func GuardianOptionGovernor(governorEnabled bool) *GuardianOption {
 	return &GuardianOption{
-		name: "governor",
+		name:         "governor",
+		dependencies: []string{"db"},
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			if governorEnabled {
 				logger.Info("chain governor is enabled")
@@ -157,7 +168,7 @@ func GuardianOptionStatusServer(statusAddr string) *GuardianOption {
 				// pprof server. NOT necessarily safe to expose publicly - only enable it in dev mode to avoid exposing it by
 				// accident. There's benefit to having pprof enabled on production nodes, but we would likely want to expose it
 				// via a dedicated port listening on localhost, or via the admin UNIX socket.
-				if g.env == common.UnsafeDevNet {
+				if g.env == common.UnsafeDevNet || g.env == common.GoTest {
 					// Pass requests to http.DefaultServeMux, which pprof automatically registers with as an import side-effect.
 					router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 				}
@@ -244,7 +255,7 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 
 			for _, wc := range watcherConfigs {
 				if _, ok := watchers[wc.GetNetworkID()]; ok {
-					logger.Fatal("NetworkID already configured", zap.String("network_id", string(wc.GetNetworkID())))
+					return fmt.Errorf("NetworkID already configured: %s", string(wc.GetNetworkID()))
 				}
 
 				watcherName := string(wc.GetNetworkID()) + "watch"
@@ -269,7 +280,7 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 				l1finalizer, runnable, err := wc.Create(chainMsgC[wc.GetChainID()], chainObsvReqC[wc.GetChainID()], g.setC.writeC, g.env)
 
 				if err != nil {
-					logger.Fatal("error creating watcher", zap.Error(err))
+					return fmt.Errorf("error creating watcher: %w", err)
 				}
 
 				g.runnablesWithScissors[watcherName] = runnable
@@ -305,7 +316,7 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 					readiness.RegisterComponent(common.ReadinessIBCSyncing)
 					g.runnablesWithScissors["ibcwatch"] = ibc.NewWatcher(ibcWatcherConfig.Websocket, ibcWatcherConfig.Lcd, ibcWatcherConfig.Contract, chainConfig).Run
 				} else {
-					logger.Error("Although IBC is enabled, there are no chains for it to monitor")
+					return errors.New("Although IBC is enabled, there are no chains for it to monitor")
 				}
 			}
 
@@ -318,7 +329,7 @@ func GuardianOptionWatchers(watcherConfigs []watchers.WatcherConfig, ibcWatcherC
 func GuardianOptionAdminService(socketPath string, ethRpc *string, ethContract *string, rpcMap map[string]string) *GuardianOption {
 	return &GuardianOption{
 		name:         "admin-service",
-		dependencies: []string{"governor"},
+		dependencies: []string{"governor", "db"},
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			adminService, err := adminServiceRunnable(
 				logger,
@@ -335,7 +346,7 @@ func GuardianOptionAdminService(socketPath string, ethRpc *string, ethContract *
 				rpcMap,
 			)
 			if err != nil {
-				logger.Fatal("failed to create admin service socket", zap.Error(err))
+				return err
 			}
 			g.runnables["admin"] = adminService
 
@@ -346,12 +357,12 @@ func GuardianOptionAdminService(socketPath string, ethRpc *string, ethContract *
 func GuardianOptionPublicRpcSocket(publicGRPCSocketPath string, publicRpcLogDetail common.GrpcLogDetail) *GuardianOption {
 	return &GuardianOption{
 		name:         "publicrpcsocket",
-		dependencies: []string{"governor"},
+		dependencies: []string{"governor", "db"},
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			// local public grpc service socket
 			publicrpcUnixService, publicrpcServer, err := publicrpcUnixServiceRunnable(logger, publicGRPCSocketPath, publicRpcLogDetail, g.db, g.gst, g.gov)
 			if err != nil {
-				logger.Fatal("failed to create publicrpc service socket", zap.Error(err))
+				return err
 			}
 
 			g.runnables["publicrpcsocket"] = publicrpcUnixService
@@ -363,7 +374,7 @@ func GuardianOptionPublicRpcSocket(publicGRPCSocketPath string, publicRpcLogDeta
 func GuardianOptionPublicrpcTcpService(publicRpc string, publicRpcLogDetail common.GrpcLogDetail) *GuardianOption {
 	return &GuardianOption{
 		name:         "publicrpc",
-		dependencies: []string{"governor", "publicrpcsocket"},
+		dependencies: []string{"governor", "publicrpcsocket", "db"},
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			publicrpcService, err := publicrpcTcpServiceRunnable(logger, publicRpc, publicRpcLogDetail, g.db, g.gst, g.gov)
 			if err != nil {
@@ -395,6 +406,44 @@ func GuardianOptionBigTablePersistence(config *reporter.BigTableConnectionConfig
 		}}
 }
 
+func GuardianOptionDatabase(db *db.Database) *GuardianOption {
+	return &GuardianOption{
+		name: "db",
+		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
+			g.db = db
+			return nil
+		}}
+}
+
+func GuardianOptionProcessor() *GuardianOption {
+	return &GuardianOption{
+		name: "processor",
+		// governor and accountant may be set to nil, but that choice needs to be made before the processor is configured
+		dependencies: []string{"db", "governor", "accountant"},
+
+		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
+
+			g.runnables["processor"] = processor.NewProcessor(ctx,
+				g.db,
+				g.msgC.readC,
+				g.setC.readC,
+				g.gossipSendC,
+				g.obsvC,
+				g.obsvReqSendC.writeC,
+				g.injectC.readC,
+				g.signedInC.readC,
+				g.gk,
+				g.gst,
+				g.attestationEvents,
+				g.gov,
+				g.acct,
+				g.acctC.readC,
+			).Run
+
+			return nil
+		}}
+}
+
 type G struct {
 	// rootCtxCancel is a context.CancelFunc. It MUST be a root context for any context that is passed to any member function of G.
 	// It can be used by components to shut down the entire node if they encounter an unrecoverable state.
@@ -410,7 +459,6 @@ type G struct {
 	acct              *accountant.Accountant
 	gov               *governor.ChainGovernor
 	attestationEvents *reporter.AttestationEventReporter
-	wormchainConn     *wormconn.ClientConn
 	publicrpcServer   *grpc.Server
 
 	// runnables
@@ -440,15 +488,11 @@ type G struct {
 
 func NewGuardianNode(
 	env common.Environment,
-	db *db.Database,
 	gk *ecdsa.PrivateKey,
-	wormchainConn *wormconn.ClientConn, // TODO does this need to be here?
 ) *G {
 	g := G{
-		env:           env,
-		db:            db,
-		gk:            gk,
-		wormchainConn: wormchainConn,
+		env: env,
+		gk:  gk,
 	}
 	return &g
 }
@@ -519,6 +563,7 @@ func (g *G) Run(rootCtxCancel context.CancelFunc, options ...*GuardianOption) su
 		if err := g.applyOptions(ctx, logger, options); err != nil {
 			logger.Fatal("failed to initialize GuardianNode", zap.Error(err))
 		}
+		logger.Info("GuardianNode initialization done.") // Do not modify this message, node_test.go relies on it.
 
 		// Start the watchers
 		for runnableName, runnable := range g.runnablesWithScissors {
@@ -528,6 +573,8 @@ func (g *G) Run(rootCtxCancel context.CancelFunc, options ...*GuardianOption) su
 			}
 		}
 
+		// TODO there is an opportunity to refactor the startup of the accountant and governor:
+		// Ideally they should just register a g.runnables["governor"] and g.runnables["accountant"] instead of being treated as special cases.
 		if g.acct != nil {
 			logger.Info("Starting accountant")
 			if err := g.acct.Start(ctx); err != nil {
@@ -540,26 +587,6 @@ func (g *G) Run(rootCtxCancel context.CancelFunc, options ...*GuardianOption) su
 			if err := g.gov.Run(ctx); err != nil {
 				logger.Fatal("failed to create chain governor", zap.Error(err))
 			}
-		}
-
-		logger.Info("Starting processor")
-		if err := supervisor.Run(ctx, "processor", processor.NewProcessor(ctx,
-			g.db,
-			g.msgC.readC,
-			g.setC.readC,
-			g.gossipSendC,
-			g.obsvC,
-			g.obsvReqSendC.writeC,
-			g.injectC.readC,
-			g.signedInC.readC,
-			g.gk,
-			g.gst,
-			g.attestationEvents,
-			g.gov,
-			g.acct,
-			g.acctC.readC,
-		).Run); err != nil {
-			logger.Fatal("failed to start processor", zap.Error(err))
 		}
 
 		// Start any other runnables

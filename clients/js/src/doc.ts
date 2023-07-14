@@ -16,11 +16,15 @@ import * as recover from "./cmds/recover";
 import * as submit from "./cmds/submit";
 import * as sui from "./cmds/sui";
 import * as verifyVaa from "./cmds/verifyVaa";
+import * as status from "./cmds/status";
 
 const MD_TAG = "<!--CLI_USAGE-->";
 
-async function getHelpText(name: string, cmd: any): Promise<string> {
-  return await cmd.builder(yargs).scriptName(`worm ${cmd.command}`).getHelp();
+async function getHelpText(cmd: any): Promise<string> {
+  // Note that `yargs` is called as a function to produce a fresh copy.
+  // Otherwise the imported module is effectively a singleton where state from
+  // other commands is accumulated from repeat calls.
+  return await cmd.builder(yargs()).scriptName(`worm ${cmd.command}`).getHelp();
 }
 
 (async function () {
@@ -36,13 +40,15 @@ async function getHelpText(name: string, cmd: any): Promise<string> {
     submit,
     sui,
     verifyVaa,
+    status,
   ];
 
   const helpOutputs: Buffer[] = [];
-  for (const [name, cmd] of Object.entries(cmds)) {
-    const helpText = await getHelpText(name, cmd);
+  for (const cmd of cmds) {
+    const helpText = await getHelpText(cmd);
 
-    helpOutputs.push(Buffer.from(`
+    helpOutputs.push(
+      Buffer.from(`
 <details>
 <summary> ${cmd.command} </summary>
 
@@ -50,10 +56,9 @@ async function getHelpText(name: string, cmd: any): Promise<string> {
 ${helpText}
 \`\`\`
 </details>
-`))
+`)
+    );
   }
-
-
 
   const f = fs.readFileSync("README.md");
   const startIdx = f.indexOf(MD_TAG, 0);
@@ -62,7 +67,7 @@ ${helpText}
   const head = f.subarray(0, startIdx + MD_TAG.length);
   const tail = f.subarray(stopIdx, f.length);
 
-  const content = Buffer.concat([head, ...helpOutputs, tail])
+  const content = Buffer.concat([head, ...helpOutputs, tail]);
 
-  fs.writeFileSync("README.md", content.toString())
+  fs.writeFileSync("README.md", content.toString());
 })();
