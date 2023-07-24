@@ -611,18 +611,16 @@ func runNode(cmd *cobra.Command, args []string) {
 		logger.Fatal("Both --optimismContract and --optimismRPC must be set together or both unset")
 	}
 
+	if (*baseRPC == "") != (*baseContract == "") {
+		logger.Fatal("Both --baseContract and --baseRPC must be set together or both unset")
+	}
+
 	if *testnetMode {
 		if *neonRPC == "" {
 			logger.Fatal("Please specify --neonRPC")
 		}
 		if *neonContract == "" {
 			logger.Fatal("Please specify --neonContract")
-		}
-		if *baseRPC == "" {
-			logger.Fatal("Please specify --baseRPC")
-		}
-		if *baseContract == "" {
-			logger.Fatal("Please specify --baseContract")
 		}
 		if *sepoliaRPC == "" {
 			logger.Fatal("Please specify --sepoliaRPC")
@@ -636,12 +634,6 @@ func runNode(cmd *cobra.Command, args []string) {
 		}
 		if *neonContract != "" && !*unsafeDevMode {
 			logger.Fatal("Please do not specify --neonContract")
-		}
-		if *baseRPC != "" && !*unsafeDevMode {
-			logger.Fatal("Please do not specify --baseRPC")
-		}
-		if *baseContract != "" && !*unsafeDevMode {
-			logger.Fatal("Please do not specify --baseContract")
 		}
 		if *sepoliaRPC != "" && !*unsafeDevMode {
 			logger.Fatal("Please do not specify --sepoliaRPC")
@@ -833,8 +825,10 @@ func runNode(cmd *cobra.Command, args []string) {
 				logger.Info("Error resolving guardian-0.guardian. Trying again...")
 				time.Sleep(time.Second)
 			}
-			// TODO this is a hack. If this is not the bootstrap Guardian, we wait 5s such that the bootstrap Guardian has enough time to start.
-			logger.Info("This is not a bootstrap Guardian. Waiting another 10 seconds so the bootstrap guardian to come online.")
+			// TODO this is a hack. If this is not the bootstrap Guardian, we wait 10s such that the bootstrap Guardian has enough time to start.
+			// This may no longer be necessary because now the p2p.go ensures that it can connect to at least one bootstrap peer and will
+			// exit the whole guardian if it is unable to. Sleeping here for a bit may reduce overall startup time by preventing unnecessary restarts, though.
+			logger.Info("This is not a bootstrap Guardian. Waiting another 10 seconds for the bootstrap guardian to come online.")
 			time.Sleep(time.Second * 10)
 		}
 	} else {
@@ -1176,6 +1170,17 @@ func runNode(cmd *cobra.Command, args []string) {
 		watcherConfigs = append(watcherConfigs, wc)
 	}
 
+	if shouldStart(baseRPC) {
+		wc := &evm.WatcherConfig{
+			NetworkID: "base",
+			ChainID:   vaa.ChainIDBase,
+			Rpc:       *baseRPC,
+			Contract:  *baseContract,
+		}
+
+		watcherConfigs = append(watcherConfigs, wc)
+	}
+
 	if shouldStart(terraWS) {
 		wc := &cosmwasm.WatcherConfig{
 			NetworkID: "terra",
@@ -1321,17 +1326,6 @@ func runNode(cmd *cobra.Command, args []string) {
 				Rpc:                 *neonRPC,
 				Contract:            *neonContract,
 				L1FinalizerRequired: "solana-finalized",
-			}
-
-			watcherConfigs = append(watcherConfigs, wc)
-		}
-
-		if shouldStart(baseRPC) {
-			wc := &evm.WatcherConfig{
-				NetworkID: "base",
-				ChainID:   vaa.ChainIDBase,
-				Rpc:       *baseRPC,
-				Contract:  *baseContract,
 			}
 
 			watcherConfigs = append(watcherConfigs, wc)
