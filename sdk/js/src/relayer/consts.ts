@@ -94,6 +94,9 @@ const MAINNET: { [K in ChainName]?: AddressInfo } = {
   optimism: {
     wormholeRelayerAddress: "0x27428DD2d3DD32A4D7f7C497eAaa23130d894911",
   },
+  base: {
+    wormholeRelayerAddress: "0x706f82e9bb5b0813501714ab5974216704980e31",
+  },
 };
 
 export const RELAYER_CONTRACTS = { MAINNET, TESTNET, DEVNET };
@@ -187,6 +190,7 @@ export const RPCS_BY_CHAIN: {
     arbitrum: "https://goerli-rollup.arbitrum.io/rpc",
     optimism: "https://goerli.optimism.io",
     gnosis: "https://sokol.poa.network/",
+    rootstock: "https://public-node.rsk.co",
   },
   DEVNET: {
     ethereum: "http://localhost:8545",
